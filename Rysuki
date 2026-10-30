@@ -1,0 +1,368 @@
+Ryuhub
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local TweenService = game:GetService("TweenService")
+local UserInputService = game:GetService("UserInputService")
+local LocalPlayer = Players.LocalPlayer
+local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
+
+-- 1. ENGINE SETTINGS (Awtomatikong magbabago kapag ginalaw ang UI)
+local RyuConfig = {
+    AutoParry = true,
+    AutoSpam = true,
+    Accuracy = 0.98,
+    ClashDistance = 16,
+    EmergencyDistance = 10,
+    SpamDelay = 0.001,
+    SkillTracker = true
+}
+
+local lastSpamTime = 0
+local TargetAbilities = {"Invisible", "Wind", "Teleport", "Freeze", "Pull", "Swap", "Dash", "Rapture", "Reaper"}
+
+-- 2. AUTOMATIC CORE DETECTORS
+local function findParryRemote()
+    local possibleNames = {"Parry", "ParryRemote", "Hit", "HitRemote", "ParryEvent", "HitEvent"}
+    local places = {ReplicatedStorage, ReplicatedStorage:FindFirstChild("Remotes"), ReplicatedStorage:FindFirstChild("Events")}
+    for _, folder in pairs(places) do
+        if folder then
+            for _, name in pairs(possibleNames) do
+                local found = folder:FindFirstChild(name)
+                if found and (found:IsA("RemoteEvent") or found:IsA("UnreliableRemoteEvent")) then return found end
+            end
+        end
+    end
+    return nil
+end
+local parryRemote = findParryRemote()
+
+local function fetchBall()
+    for _, obj in ipairs(workspace:GetChildren()) do
+        if obj:IsA("BasePart") and (obj.Name:lower():find("ball") or obj:GetAttribute("Target") ~= nil) then return obj end
+    end
+    return nil
+end
+
+-- 3. MOBILE INTERFACE CORE
+local ScreenGui = Instance.new("ScreenGui")
+ScreenGui.Name = "RyuHubAIO"
+ScreenGui.ResetOnSpawn = false
+ScreenGui.Parent = PlayerGui
+
+-- FLOATING TOGGLE BUTTON
+local ToggleButton = Instance.new("TextButton")
+ToggleButton.Name = "RyuToggle"
+ToggleButton.Size = UDim2.new(0, 45, 0, 45)
+ToggleButton.Position = UDim2.new(0.05, 0, 0.15, 0)
+ToggleButton.BackgroundColor3 = Color3.fromRGB(255, 45, 45)
+ToggleButton.Text = "R"
+ToggleButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+ToggleButton.TextSize = 20
+ToggleButton.Font = Enum.Font.SourceSansBold
+ToggleButton.Parent = ScreenGui
+
+Instance.new("UICorner", ToggleButton).CornerRadius = UDim.new(1, 0)
+local btnStroke = Instance.new("UIStroke", ToggleButton)
+btnStroke.Color = Color3.fromRGB(255, 255, 255)
+btnStroke.Thickness = 1.5
+
+-- MOBILE DRAG SUPPORT
+local dragging, dragInput, dragStart, startPos
+UserInputService.InputBegan:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.Touch and input.Target == ToggleButton then
+        dragging = true
+        dragStart = input.Position
+        startPos = ToggleButton.Position
+    end
+end)
+UserInputService.InputChanged:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.Touch and dragging then
+        local delta = input.Position - dragStart
+        ToggleButton.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
+    end
+end)
+UserInputService.InputEnded:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.Touch then dragging = false end
+end)
+
+-- MAIN CONTAINER WINDOW
+local MainFrame = Instance.new("Frame")
+MainFrame.Name = "MainFrame"
+MainFrame.Size = UDim2.new(0, 520, 0, 300)
+MainFrame.Position = UDim2.new(0.5, -260, 0.5, -150)
+MainFrame.BackgroundColor3 = Color3.fromRGB(15, 15, 15)
+MainFrame.BorderSizePixel = 0
+MainFrame.Parent = ScreenGui
+
+Instance.new("UICorner", MainFrame).CornerRadius = UDim.new(0, 10)
+
+ToggleButton.Activated:Connect(function()
+    MainFrame.Visible = not MainFrame.Visible
+end)
+
+-- LEFT SIDEBAR
+local Sidebar = Instance.new("Frame", MainFrame)
+Sidebar.Size = UDim2.new(0, 120, 1, 0)
+Sidebar.BackgroundColor3 = Color3.fromRGB(22, 22, 22)
+Sidebar.BorderSizePixel = 0
+Instance.new("UICorner", Sidebar).CornerRadius = UDim.new(0, 10)
+
+local MenuTitle = Instance.new("TextLabel", Sidebar)
+MenuTitle.Size = UDim2.new(1, 0, 0, 45)
+MenuTitle.Text = "ryu hub"
+MenuTitle.TextColor3 = Color3.fromRGB(255, 50, 50)
+MenuTitle.TextSize = 22
+MenuTitle.Font = Enum.Font.SourceSansBold
+MenuTitle.BackgroundTransparency = 1
+
+-- SIDEBAR TABS CONTAINER
+local TabContainer = Instance.new("Frame", Sidebar)
+TabContainer.Position = UDim2.new(0, 10, 0, 50)
+TabContainer.Size = UDim2.new(1, -20, 1, -60)
+TabContainer.BackgroundTransparency = 1
+
+local listLayout = Instance.new("UIListLayout", TabContainer)
+listLayout.Padding = UDim.new(0, 6)
+
+local function buildTab(name, isActive)
+    local btn = Instance.new("TextButton", TabContainer)
+    btn.Size = UDim2.new(1, 0, 0, 32)
+    btn.BackgroundColor3 = isActive and Color3.fromRGB(35, 35, 35) or Color3.fromRGB(26, 26, 26)
+    btn.Text = "   " .. name
+    btn.TextColor3 = isActive and Color3.fromRGB(255, 255, 255) or Color3.fromRGB(160, 160, 160)
+    btn.TextXAlignment = Enum.TextXAlignment.Left
+    btn.Font = Enum.Font.SourceSansBold
+    btn.TextSize = 14
+    Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 6)
+    return btn
+end
+
+local combatBtn = buildTab("combat", true)
+local visualBtn = buildTab("visual", false)
+local miscBtn = buildTab("misc", false)
+local ContentArea = Instance.new("Frame", MainFrame)
+ContentArea.Position = UDim2.new(0, 135, 0, 15)
+ContentArea.Size = UDim2.new(1, -150, 1, -30)
+ContentArea.BackgroundTransparency = 1
+
+local gridLayout = Instance.new("UIGridLayout", ContentArea)
+gridLayout.CellSize = UDim2.new(0, 175, 0, 125)
+gridLayout.CellPadding = UDim2.new(0, 15, 0, 15)
+
+-- FUNCTION TO GENERATE CARDS
+local function createSectionCard(title)
+    local card = Instance.new("Frame", ContentArea)
+    card.BackgroundColor3 = Color3.fromRGB(22, 22, 22)
+    Instance.new("UICorner", card).CornerRadius = UDim.new(0, 8)
+    
+    local lbl = Instance.new("TextLabel", card)
+    lbl.Size = UDim2.new(1, -10, 0, 25)
+    lbl.Position = UDim2.new(0, 10, 0, 5)
+    lbl.Text = title
+    lbl.TextColor3 = Color3.fromRGB(255, 255, 255)
+    lbl.Font = Enum.Font.SourceSansBold
+    lbl.TextSize = 14
+    lbl.TextXAlignment = Enum.TextXAlignment.Left
+    lbl.BackgroundTransparency = 1
+    
+    return card
+end
+
+local parryCard = createSectionCard("parry")
+local spamCard = createSectionCard("spam")
+
+-- FUNCTION TO ADD INTERACTIVE TOGGLES
+local function addToggle(parent, labelText, defaultState, callback)
+    local container = Instance.new("Frame", parent)
+    container.Size = UDim2.new(1, -20, 0, 30)
+    container.Position = UDim2.new(0, 10, 0, 35)
+    container.BackgroundTransparency = 1
+    
+    local lbl = Instance.new("TextLabel", container)
+    lbl.Size = UDim2.new(0, 100, 1, 0)
+    lbl.Text = labelText
+    lbl.TextColor3 = Color3.fromRGB(180, 180, 180)
+    lbl.Font = Enum.Font.SourceSans
+    lbl.TextSize = 14
+    lbl.TextXAlignment = Enum.TextXAlignment.Left
+    lbl.BackgroundTransparency = 1
+    
+    local switch = Instance.new("TextButton", container)
+    switch.Size = UDim2.new(0, 35, 0, 18)
+    switch.Position = UDim2.new(1, -35, 0.5, -9)
+    switch.BackgroundColor3 = defaultState and Color3.fromRGB(255, 45, 45) or Color3.fromRGB(45, 45, 45)
+    switch.Text = ""
+    Instance.new("UICorner", switch).CornerRadius = UDim.new(1, 0)
+    
+    local dot = Instance.new("Frame", switch)
+    dot.Size = UDim2.new(0, 14, 0, 14)
+    dot.Position = defaultState and UDim2.new(1, -16, 0.5, -7) or UDim2.new(0, 2, 0.5, -7)
+    dot.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+    Instance.new("UICorner", dot).CornerRadius = UDim.new(1, 0)
+    
+    local state = defaultState
+    switch.Activated:Connect(function()
+        state = not state
+        switch.BackgroundColor3 = state and Color3.fromRGB(255, 45, 45) or Color3.fromRGB(45, 45, 45)
+        dot.Position = state and UDim2.new(1, -16, 0.5, -7) or UDim2.new(0, 2, 0.5, -7)
+        callback(state)
+    end)
+end
+
+-- FUNCTION TO ADD INTERACTIVE SLIDER
+local function addSlider(parent, labelText, min, max, default, callback)
+    local container = Instance.new("Frame", parent)
+    container.Size = UDim2.new(1, -20, 0, 40)
+    container.Position = UDim2.new(0, 10, 0, 70)
+    container.BackgroundTransparency = 1
+    
+    local lbl = Instance.new("TextLabel", container)
+    lbl.Size = UDim2.new(1, 0, 0, 15)
+    lbl.Text = labelText .. ": " .. tostring(default)
+    lbl.TextColor3 = Color3.fromRGB(180, 180, 180)
+    lbl.Font = Enum.Font.SourceSans
+    lbl.TextSize = 13
+    lbl.TextXAlignment = Enum.TextXAlignment.Left
+    lbl.BackgroundTransparency = 1
+    
+    local track = Instance.new("Frame", container)
+    track.Size = UDim2.new(1, 0, 0, 4)
+    track.Position = UDim2.new(0, 0, 0, 24)
+    track.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
+    track.BorderSizePixel = 0
+    
+    local fill = Instance.new("Frame", track)
+    fill.Size = UDim2.new((default - min)/(max - min), 0, 1, 0)
+    fill.BackgroundColor3 = Color3.fromRGB(255, 45, 45)
+    fill.BorderSizePixel = 0
+    
+    local handle = Instance.new("TextButton", track)
+    handle.Size = UDim2.new(0, 12, 0, 12)
+    handle.Position = UDim2.new((default - min)/(max - min), -6, 0.5, -6)
+    handle.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+    handle.Text = ""
+    Instance.new("UICorner", handle).CornerRadius = UDim.new(1, 0)
+    
+    local slideActive = false
+    handle.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.Touch then slideActive = true end
+    end)
+    UserInputService.InputEnded:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.Touch then slideActive = false end
+    end)
+    UserInputService.InputChanged:Connect(function(input)
+        if slideActive and input.UserInputType == Enum.UserInputType.Touch then
+            local relativeX = math.clamp((input.Position.X - track.AbsolutePosition.X) / track.AbsoluteSize.X, 0, 1)
+            local value = math.round(min + (relativeX * (max - min)))
+            lbl.Text = labelText .. ": " .. tostring(value)
+            fill.Size = UDim2.new(relativeX, 0, 1, 0)
+            handle.Position = UDim2.new(relativeX, -6, 0.5, -6)
+            callback(value)
+        end
+    end)
+end
+
+-- LINKING UI INPUTS TO ENGINE CONFIGS
+addToggle(parryCard, "auto parry", true, function(state) RyuConfig.AutoParry = state end)
+addSlider(parryCard, "accuracy", 70, 100, 98, function(val) RyuConfig.Accuracy = val / 100 end)
+
+addToggle(spamCard, "auto spam", true, function(state) RyuConfig.AutoSpam = state end)
+addSlider(spamCard, "clash zone", 10, 30, 16, function(val) RyuConfig.ClashDistance = val end)
+
+-- 4. PREMIUM NOTIFICATION BOX
+local function notifyRyu(title, text)
+    task.spawn(function()
+        local frame = Instance.new("Frame", ScreenGui)
+        frame.Size = UDim2.new(0, 210, 0, 48)
+        frame.Position = UDim2.new(1, 30, 0.78, 0)
+        frame.BackgroundColor3 = Color3.fromRGB(12, 12, 12)
+        frame.BorderSizePixel = 0
+        Instance.new("UICorner", frame).CornerRadius = UDim.new(0, 6)
+        local strk = Instance.new("UIStroke", frame)
+        strk.Color = Color3.fromRGB(255, 45, 45)
+        
+        local t = Instance.new("TextLabel", frame)
+        t.Size = UDim2.new(1, -10, 0, 18)
+        t.Position = UDim2.new(0, 10, 0, 4)
+        t.Text = title
+        t.TextColor3 = Color3.fromRGB(255, 60, 60)
+        t.Font = Enum.Font.SourceSansBold
+        t.TextSize = 13
+        t.BackgroundTransparency = 1
+        t.TextXAlignment = Enum.TextXAlignment.Left
+        
+        local b = Instance.new("TextLabel", frame)
+        b.Size = UDim2.new(1, -10, 0, 18)
+        b.Position = UDim2.new(0, 10, 0, 22)
+        b.Text = text
+        b.TextColor3 = Color3.fromRGB(220, 220, 220)
+        b.Font = Enum.Font.SourceSans
+        b.TextSize = 12
+        b.BackgroundTransparency = 1
+        b.TextXAlignment = Enum.TextXAlignment.Left
+        
+        TweenService:Create(frame, TweenInfo.new(0.25), {Position = UDim2.new(1, -230, 0.78, 0)}):Play()
+        task.wait(2.2)
+        TweenService:Create(frame, TweenInfo.new(0.25), {Position = UDim2.new(1, 30, 0.78, 0)}):Play()
+        task.wait(0.2)
+        frame:Destroy()
+    end)
+end
+
+-- 5. ENGINE LOOP OPERATION
+RunService.PreSimulation:Connect(function()
+    if not RyuConfig.AutoParry then return end
+    local character = LocalPlayer.Character
+    local hrp = character and character:FindFirstChild("HumanoidRootPart")
+    if not hrp then return end
+    
+    local ball = fetchBall()
+    if not ball then return end
+    
+    local rawTarget = ball:GetAttribute("Target") or ball:GetAttribute("target") or ball:GetAttribute("player")
+    local isBallTargetingMe = false
+    
+    if rawTarget then
+        local targetStr = tostring(rawTarget)
+        if targetStr == LocalPlayer.Name or targetStr == LocalPlayer.DisplayName or targetStr == tostring(LocalPlayer.UserId) then
+            isBallTargetingMe = true
+        end
+    end
+    
+    if isBallTargetingMe then
+        local myPosition = hrp.Position
+        local ballPosition = ball.Position
+        local ballVelocity = ball.AssemblyLinearVelocity
+        
+        local distance = (ballPosition - myPosition).Magnitude
+        local speed = ballVelocity.Magnitude
+        
+        if RyuConfig.AutoSpam and distance <= RyuConfig.ClashDistance then
+            local now = os.clock()
+            if (now - lastSpamTime) >= RyuConfig.SpamDelay then
+                lastSpamTime = now
+                if parryRemote then parryRemote:FireServer() end
+            end
+            return
+        end
+        
+        local ballDirection = ballVelocity.Unit
+        local playerDirection = (myPosition - ballPosition).Unit
+        local facingFactor = ballDirection:Dot(playerDirection)
+        
+        if facingFactor > 0.30 or distance <= RyuConfig.EmergencyDistance then
+            if speed > 0 then
+                local arrivalTime = distance / speed
+                local networkPing = tonumber(LocalPlayer:GetPing()) or 0.045
+                local parryThresholdWindow = (networkPing * RyuConfig.Accuracy) + 0.015
+                
+                if arrivalTime <= parryThresholdWindow or distance <= RyuConfig.EmergencyDistance then
+                    if parryRemote then parryRemote:FireServer() end
+                end
+            end
+        end
+    end
+end)
+
+notifyRyu("RYU HUB FULL v3", "Naka-load na at Handang-handa na, Twin! 🚀")
